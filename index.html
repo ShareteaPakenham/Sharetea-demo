@@ -1146,7 +1146,7 @@ function buildCF(id, pg) {
     b.className = 'cat-btn'+(c===activeCat[pg]?' active':'');
     b.textContent = c;
     b.onclick = () => { activeCat[pg]=c; buildCF(id,pg);
-      if(pg==='stock') renderStock();
+      if(pg==='stock'||pg==='stockcount') renderStock();
       else if(pg==='proj') renderProj();
       else renderHist();
     };
@@ -1798,7 +1798,7 @@ function setSort(mode) {
 
 const CAT_ORDER = ['Tea Leaves','Flavor Powder','Syrup & Jam','Toppings','Packaging','Merchandise'];
 function sortedItems() {
-  const entries = Object.entries(allItems()).filter(([,v]) => activeCat.stock === 'All' || v.cat === activeCat.stock);
+  const entries = Object.entries(allItems()).filter(([,v]) => activeCat.stockcount === 'All' || v.cat === activeCat.stockcount);
   if (currentSort === 'alpha') return entries.sort((a,b) => a[1].name.localeCompare(b[1].name));
   // default: category order then by code
   return entries.sort((a,b) => {
