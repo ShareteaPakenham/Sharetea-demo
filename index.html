@@ -523,7 +523,10 @@ const XLSX = {
   <div class="card" style="margin-top:12px;border:2px solid var(--brand);border-radius:var(--radius)">
     <div class="card-title" onclick="toggleParams()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
       <span>Order parameters</span>
-      <span id="paramsToggleIcon" style="font-size:12px;color:var(--ink3)">▼ Adjust</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button onclick="toggleHolidayUplift()" id="holidayUpliftBtn" style="background:#FFF0F0;border:1.5px solid var(--brand);color:var(--brand);border-radius:99px;padding:3px 10px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">🎉 Holiday Uplift</button>
+        <span id="paramsToggleIcon" style="font-size:12px;color:var(--ink3)">▼ Adjust</span>
+      </div>
     </div>
     <div id="paramsBody" style="display:none">
     <div class="param-grid">
@@ -571,6 +574,15 @@ const XLSX = {
       <button onclick="dismissPendingSOH()" style="padding:5px 12px;background:white;color:#185fa5;border:1.5px solid #a8cef5;border-radius:var(--radius-sm);font-size:12px;font-weight:700;font-family:inherit;cursor:pointer">Dismiss</button>
     </div>
   </div>
+  <!-- Holiday Uplift Toggle -->
+  <div id="holidayUpliftBanner" style="display:none;margin:0 12px 8px;padding:10px 14px;background:linear-gradient(135deg,#E63946,#c1121f);border-radius:var(--radius);color:white;display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div>
+      <strong style="display:block;font-size:14px;margin-bottom:1px">🎉 Holiday Uplift Active</strong>
+      <span style="font-size:12px;opacity:0.85">20% extra coverage added to all items</span>
+    </div>
+    <button onclick="toggleHolidayUplift()" style="background:rgba(255,255,255,0.2);border:1.5px solid rgba(255,255,255,0.4);color:white;border-radius:var(--radius-sm);padding:5px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer">Turn Off</button>
+  </div>
+
   <div class="sort-bar">
     <span class="sort-lbl">Sort:</span>
     <button class="sort-btn active" id="sort-cat" onclick="setSort('cat')">Category</button>
@@ -878,6 +890,7 @@ let newSOH      = {};
 let activeCat   = {stock:'All', stockcount:'All', proj:'All', hist:'All', setup:'All', inactive:'All'};
 let projData    = [];
 let orderAdjustments = {}; // code -> adjusted orderForms override
+let holidayUplift = false; // 20% coverage boost on top items
 let inactiveItems = new Set(JSON.parse(localStorage.getItem('inactiveItems') || '[]'));
 let pinCallback = null;
 let scriptUrl   = ''; // DEMO MODE - sheets disabled
@@ -1121,7 +1134,9 @@ function avgUsage(code) {
       uses.push(Math.max(0, prev[0] + prev[1]*it.mult - soh));
     prev=[soh,ord];
   });
-  return uses.length ? uses.reduce((a,b)=>a+b,0)/uses.length : 0;
+  // Use last 4 cycles only — keeps projections current with recent trends
+  const recent = uses.slice(-4);
+  return recent.length ? recent.reduce((a,b)=>a+b,0)/recent.length : 0;
 }
 function trendDir(code) {
   const it = allItems()[code]; if(!it||!it.cycles) return 0;
@@ -1203,7 +1218,7 @@ function calcProjection() {
     const isNew=!it.cycles||it.cycles.every(([s])=>s===null);
     const daily=avgPhys/cycDays;
     const trend=trendDir(code);
-    const adjDaily=trend===1?daily*1.15:daily;
+    const adjDaily=(trend===1?daily*1.15:daily) * (holidayUplift ? 1.2 : 1.0);
     const needLead=adjDaily*lead;
     const needCycle=adjDaily*win;
     const totalNeeded=needLead+needCycle;
@@ -1937,7 +1952,7 @@ function updateLiveTicker() {
 
     // Days since last count
     const daily = avg / cycDays;
-    const adjDaily = trendDir(code) === 1 ? daily * 1.15 : daily;
+    const adjDaily = (trendDir(code) === 1 ? daily * 1.15 : daily) * (holidayUplift ? 1.2 : 1.0);
 
     // Projected SOH = last SOH + last order received - usage since last count
     const projectedSOH = Math.max(0, lastSOH + lastOrderPhys - adjDaily * daysToOrder);
@@ -2724,7 +2739,7 @@ function showPredictedOrder() {
     // Include last order received in physical units
     const lastOrderPhys = (lastCycle && lastCycle[1]) ? lastCycle[1] * it.mult : 0;
     const daily = avg / cycDays;
-    const adjDaily = trendDir(code) === 1 ? daily * 1.15 : daily;
+    const adjDaily = (trendDir(code) === 1 ? daily * 1.15 : daily) * (holidayUplift ? 1.2 : 1.0);
     const projectedSOH = Math.max(0, lastSOH + lastOrderPhys - adjDaily * daysToOrder);
     const needed = adjDaily * (lead + win);
     const shortfall = Math.max(0, needed - projectedSOH);
@@ -2844,6 +2859,20 @@ function showSettingsTab(tab) {
     }
   });
   if (tab === 'inactive') { buildCF('cf-inactive','inactive'); renderInactive(); }
+}
+
+
+// ── HOLIDAY UPLIFT ────────────────────────────────────────────────
+function toggleHolidayUplift() {
+  holidayUplift = !holidayUplift;
+  const btn = document.getElementById('holidayUpliftBtn');
+  const banner = document.getElementById('holidayUpliftBanner');
+  if (btn) {
+    btn.style.background = holidayUplift ? 'var(--brand)' : '#FFF0F0';
+    btn.style.color = holidayUplift ? 'white' : 'var(--brand)';
+    btn.textContent = holidayUplift ? '🎉 Holiday Uplift ON' : '🎉 Holiday Uplift';
+  }
+  if (banner) banner.style.display = holidayUplift ? 'flex' : 'none';
 }
 
 // ── CLEAR FUNCTIONS ──────────────────────────────────────────────
