@@ -567,6 +567,9 @@ const XLSX = {
     <div><strong style="display:block;margin-bottom:1px">💡 Smart pre-fill active</strong><span id="smartPrefillDetail">SOH estimated based on usage since last count.</span></div>
     <button onclick="disableSmartPrefill()" style="background:none;border:1.5px solid var(--green-border);color:var(--green);border-radius:var(--radius-sm);padding:4px 10px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">Use last SOH</button>
   </div>
+  <div style="margin:8px 12px 0;display:flex;justify-content:flex-end">
+    <button onclick="checkPendingStockCount(true)" id="checkPendingBtn" style="padding:5px 12px;background:none;border:1.5px solid #a8cef5;color:#185fa5;border-radius:var(--radius-sm);font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">🔄 Check for staff count</button>
+  </div>
   <div id="pendingSOHBanner" style="display:none;margin:8px 12px 0;padding:10px 12px;background:#e6f1fb;border-radius:var(--radius-sm);font-size:13px;color:#185fa5;line-height:1.5">
     <strong style="display:block;margin-bottom:2px">📋 Pending stock count loaded</strong>
     <span id="pendingSOHText">A stock count was saved by staff.</span>
@@ -2623,8 +2626,10 @@ async function executeSaveStockCount() {
   }
 }
 
-async function checkPendingStockCount() {
-  if (!scriptUrl) return;
+async function checkPendingStockCount(manual) {
+  if (!scriptUrl) { if (manual) alert('Google Sheets not connected. Go to Settings to connect.'); return; }
+  const btn = document.getElementById('checkPendingBtn');
+  if (manual && btn) { btn.textContent = '⏳ Checking...'; btn.disabled = true; }
   try {
     const data = await jsonpFetch(scriptUrl + '?action=getPendingCount');
     if (data && data.pending && data.soh) {
@@ -2636,9 +2641,18 @@ async function checkPendingStockCount() {
         const itemCount = Object.keys(data.soh).length;
         text.textContent = 'Stock count by staff on ' + (data.date || 'unknown date') + ' — ' + itemCount + ' items counted. Load it to review and process the order.';
       }
+      if (manual) alert('Found a stock count saved by staff — review it below.');
+    } else if (manual) {
+      alert('No pending stock count found right now.');
     }
-  } catch(e) { /* no pending count, that's fine */ }
+  } catch(e) {
+    if (manual) alert('Could not check right now. Check your connection and try again.');
+  }
+  if (manual && btn) { btn.textContent = '🔄 Check for staff count'; btn.disabled = false; }
 }
+// Re-check periodically while the app stays open, so a staff save doesn't
+// require a full page reload to show up on another device
+setInterval(() => { try { checkPendingStockCount(false); } catch(e) {} }, 60000);
 
 function applyPendingSOH() {
   if (!pendingSOHData || !pendingSOHData.soh) return;
