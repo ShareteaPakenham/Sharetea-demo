@@ -813,7 +813,7 @@ const XLSX = {
 <script>
 const SHOP = 'Sharetea Pakenham';
 const PIN  = '1681';
-const CYCLES_LABELS = ['07/01/26','21/01/26','05/03/26','02/04/26','15/04/26','30/04/26','14/05/26','27/05/26','11/06/26'];
+let CYCLES_LABELS = ['07/01/26','21/01/26','05/03/26','02/04/26','15/04/26','30/04/26','14/05/26','27/05/26','11/06/26'];
 
 // ── ITEM CATALOGUE ──────────────────────────────────────────────
 const BASE_HIST = {
@@ -966,8 +966,31 @@ function setSyncStatus(state, text) {
   }
 }
 
+// ── LIVE HISTORY PERSISTENCE ─────────────────────────────────────
+// liveHist previously only ever lived in memory — closing the tab or
+// the OS reclaiming the page silently lost every saved cycle, even
+// though the data had already been written to Google Sheets. These
+// two functions keep a local mirror so a reload doesn't wipe it.
+function persistLiveHist() {
+  try {
+    localStorage.setItem('liveHist', JSON.stringify(liveHist));
+    localStorage.setItem('cyclesLabels', JSON.stringify(CYCLES_LABELS));
+  } catch(e) { /* storage full or unavailable — saved data is still safe in the Sheet */ }
+}
+function restoreLiveHist() {
+  try {
+    const savedHist = JSON.parse(localStorage.getItem('liveHist') || 'null');
+    const savedLabels = JSON.parse(localStorage.getItem('cyclesLabels') || 'null');
+    if (savedHist) Object.assign(liveHist, savedHist);
+    if (savedLabels && savedLabels.length) {
+      CYCLES_LABELS.length = 0;
+      savedLabels.forEach(l => CYCLES_LABELS.push(l));
+    }
+  } catch(e) {}
+}
+
 async function loadFromSheets() {
-  // Render built-in data immediately - no JSONP/fetch (avoids Safari CORS errors)
+  // Render built-in data immediately so the screen isn't blank while we check the network
   try { initSOH(true); } catch(e) {}
   try { renderStock(); } catch(e) {}
   try { renderHist(); } catch(e) {}
@@ -975,6 +998,38 @@ async function loadFromSheets() {
   try { calcHealthScore(); } catch(e) {}
   try { renderStockoutAlerts(); } catch(e) {}
   requestAnimationFrame(function() { try { renderDashboard(); } catch(e) {} });
+
+  // Restore anything saved locally first (covers the gap before/if the network call below fails)
+  restoreLiveHist();
+
+  // Then try to pull the real, authoritative history from the Sheet —
+  // this is what actually fixes cycles "disappearing": previously this
+  // function never asked the backend for saved data at all.
+  if (scriptUrl) {
+    try {
+      const data = await jsonpFetch(scriptUrl + '?action=getHistory');
+      if (data && data.cycles) {
+        Object.keys(data.cycles).forEach(code => {
+          if (liveHist[code]) liveHist[code].cycles = data.cycles[code];
+        });
+        if (data.cycleLabels && data.cycleLabels.length) {
+          CYCLES_LABELS.length = 0;
+          data.cycleLabels.forEach(l => CYCLES_LABELS.push(l));
+        }
+        persistLiveHist();
+        try { initSOH(true); } catch(e) {}
+        try { renderStock(); } catch(e) {}
+        try { renderHist(); } catch(e) {}
+        try { updateLiveTicker(); } catch(e) {}
+        try { calcHealthScore(); } catch(e) {}
+        try { renderStockoutAlerts(); } catch(e) {}
+        requestAnimationFrame(function() { try { renderDashboard(); } catch(e) {} });
+      }
+    } catch(e) {
+      // network/JSONP failed — fall back silently to whatever we already restored/rendered above
+    }
+  }
+
   setSyncStatus('ok', 'Data: ' + (CYCLES_LABELS[CYCLES_LABELS.length-1] || 'built-in'));
 }
 
@@ -1019,6 +1074,15 @@ async function saveToSheets(orderDate, cycleData) {
         if (liveHist[code].cycles.length > 20) liveHist[code].cycles.shift();
       }
     });
+    // build a proper DD/MM/YY label from the order date and append it,
+    // instead of letting the history page fall back to "Cycle N"
+    const dParts = orderDate.split('-'); // orderDate is YYYY-MM-DD from <input type="date">
+    if (dParts.length === 3) {
+      const label = dParts[2] + '/' + dParts[1] + '/' + dParts[0].slice(2);
+      CYCLES_LABELS.push(label);
+      if (CYCLES_LABELS.length > 20) CYCLES_LABELS.shift();
+    }
+    persistLiveHist(); // NEW — save liveHist + labels so a reload doesn't lose this cycle
     setSyncStatus('ok', 'Saved ✓');
     renderHist();
     return true;
@@ -1454,14 +1518,27 @@ function copyOrder() {
 }
 
 // ── DASHBOARD ────────────────────────────────────────────────────
-const CYCLE_DATES = ['7 Jan 26','21 Jan 26','5 Mar 26','2 Apr 26','15 Apr 26','30 Apr 26','14 May 26','27 May 26','11 Jun 26'];
+// CYCLE_DATES is now derived from CYCLES_LABELS (the single source of truth)
+// rather than its own separate hardcoded array. Previously this was a second,
+// independent list frozen at 9 cycles, so the Analytics dashboard never grew
+// past 9 even after real cycles were saved and History had moved on.
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function getCycleDates() {
+  return CYCLES_LABELS.map(lbl => {
+    const parts = lbl.split('/'); // DD/MM/YY
+    if (parts.length !== 3) return lbl;
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    return day + ' ' + (MONTH_SHORT[month] || parts[1]) + ' ' + parts[2];
+  });
+}
 let dashMode = 'spend';
 
 function renderDashboard() {
   const items = Object.values(liveHist);
 
   // ── KPIs ──
-  const cycleCount = CYCLE_DATES.length;
+  const cycleCount = getCycleDates().length;
   document.getElementById('kpiCycles').textContent = cycleCount;
   document.getElementById('dashDate').textContent = 'Jan–May 2026';
 
@@ -1536,7 +1613,7 @@ function renderDashboard() {
 function renderSpendChart() {
   const el = document.getElementById('spendChart');
   if (!el) return;
-  const vals = CYCLE_DATES.map((_, ci) => {
+  const vals = getCycleDates().map((_, ci) => {
     if (dashMode === 'spend') {
       return Object.values(liveHist).reduce((sum, it) => {
         const c = it.cycles[ci];
@@ -1574,7 +1651,7 @@ function renderSpendChart() {
   svg += '</svg>';
   // X labels
   const labelHtml = vals.map((_, i) => {
-    const d = CYCLE_DATES[i] || '';
+    const d = getCycleDates()[i] || '';
     return `<span style="flex:1;text-align:center;font-size:9px;color:var(--ink3);overflow:hidden">${d}</span>`;
   }).join('');
   el.innerHTML = svg + `<div style="display:flex;padding:2px ${padR}px 0 ${padL}px">${labelHtml}</div>`;
@@ -2195,8 +2272,8 @@ function renderStCatChart(numCycles) {
   }
 
   svg += '</svg>';
-  // Use short date labels - show month/day only
-  const shortDates = ['7 Jan','21 Jan','5 Mar','2 Apr','15 Apr','30 Apr','14 May','27 May','11 Jun'];
+  // Short date labels derived from the same source as everywhere else
+  const shortDates = getCycleDates().map(d => d.replace(/ \d{2}$/, '')); // drop trailing year
   const labelHtml = Array.from({length: n}, (_, i) => {
     const lbl = shortDates[i] || CYCLES_LABELS[i] || '';
     return `<span style="flex:1;text-align:center;font-size:7.5px;color:var(--ink3);line-height:1.2">${lbl}</span>`;
@@ -2629,6 +2706,7 @@ async function checkPendingStockCount() {
 
 function applyPendingSOH() {
   if (!pendingSOHData || !pendingSOHData.soh) return;
+  const pendingDate = pendingSOHData.date; // capture before dismissPendingSOH() nulls pendingSOHData
   Object.entries(pendingSOHData.soh).forEach(([code, val]) => {
     newSOH[code] = val;
   });
@@ -2637,13 +2715,14 @@ function applyPendingSOH() {
   calcHealthScore();
   dismissPendingSOH();
   // Set the order date to the count date if available
-  if (pendingSOHData.date) {
+  if (pendingDate) {
     const dateEl = document.getElementById('orderDate');
-    if (dateEl) dateEl.value = pendingSOHData.date;
+    if (dateEl) dateEl.value = pendingDate;
   }
   // Clear pending from sheets
   if (scriptUrl) {
-    fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ action: 'clearPendingCount', shop: SHOP }) });
+    fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ action: 'clearPendingCount', shop: SHOP }) })
+      .catch(e => console.error('clearPendingCount failed:', e));
   }
 }
 
